@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
-	<name>inversor_v2</name>
+	<name>Inversor_Trifasico</name>
 	<comment></comment>
 	<projects>
 	</projects>
@@ -84,16 +84,6 @@
 			<name>DSP28x_Project.h</name>
 			<type>1</type>
 			<locationURI>PARENT-5-PROJECT_LOC/ti/controlSUITE/device_support/f2833x/v142/DSP2833x_common/include/DSP28x_Project.h</locationURI>
-		</link>
-		<link>
-			<name>codigoINV.c</name>
-			<type>1</type>
-			<locationURI>PARENT-3-PROJECT_LOC/Desktop/Codigos_Teste_Inversor/codigoINV.c</locationURI>
-		</link>
-		<link>
-			<name>codigoINV_antigo.c</name>
-			<type>1</type>
-			<locationURI>PARENT-3-PROJECT_LOC/Downloads/codigoINV_antigo.c</locationURI>
 		</link>
 	</linkedResources>
 </projectDescription>
