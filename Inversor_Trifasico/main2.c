@@ -67,7 +67,8 @@ void Change_ePWM(float InvFaseA, float InvFaseB, float InvFaseC); // Função que 
 
 // Variaveis para armazenamento das caracteristicas do sinal
 float V_A = 0; // Tensao máxima obtida
-float I_A = 0; // Corrente máxima obtida
+float I_A = 0, I_B = 0, I_C = 0;
+float I_Af[2] = {0}, I_Bf[2] = {0}, I_Cf[2] = {0}; // Corrente máxima obtida
 
 // Váriáveis associadas à placa de aquisição de sinais
 // ---------------------------------------------------
@@ -94,7 +95,7 @@ const float Z_base = 28.88;
  *                              50                          0,3030303030 * 5,0
  */
 const float KV_PCI = 261.36;//290.40; //13.2; // 290.40; // 167.64;
-const float KI_PCI = 33.0;    // AINDA DEVE SER AJUSTADO CORRETAMENTE                                       //// -----> NÃO ENTENDI COMO AJUSTAR ISTO
+const float KI_PCI = 33.0/4.0;    // AINDA DEVE SER AJUSTADO CORRETAMENTE                                       //// -----> NÃO ENTENDI COMO AJUSTAR ISTO
 /*
  * Constante utilizada para transformar o valor de saida do conversor A/D no valor de entrada.  A mesma segue
  * a resolução do conversor A/D do DSP (3,3 V; 12 bits - 4095)
@@ -626,8 +627,6 @@ interrupt void adc_isr(void)
     P_med[0] = 1.5*(Vd_med[0]*Id_med[0] + Vq_med[0]*Iq_med[0])/S_base;
     Q_med[0] = 1.5*(Vq_med[0]*Id_med[0] - Vd_med[0]*Iq_med[0])/S_base;
 
-
-
     // * Filtragem das potências trifásicas. O filtro passa-baixas têm
     // * frequência de corte em 100 rad/s.
 
@@ -649,10 +648,12 @@ interrupt void adc_isr(void)
     Id_ref[1] = Id_ref[0];
 
     Id_ref[0] = K1*Erro_P[0] - K2*Erro_P[1] + Id_ref[1];
+    Id_ref[0] = 0.2; // <--- Valor inserido de corrente
 
     Iq_ref[1] = Iq_ref[0];
 
     Iq_ref[0] = K3*Erro_Q[0] - K4*Erro_Q[1] + Iq_ref[1];
+    Iq_ref[0] = 0.0; // <-- Valor inserido de corrente
 
     // Controladores de corrente de eixo direto: calculo do erro e execução do controle PI
 
@@ -866,12 +867,41 @@ void Data_Estimation(void){
         V_A = Tensao_A[AMOSTRAS-1];
     }
 
+    //Id_medf[1] = Id_medf[0];
+    //Iq_medf[1] = Iq_medf[0];
+    //Id_medf[0] = 0.04762*Id_med[0] + 0.04762*Id_med[1] + 0.9048*Id_medf[1];
+    //Iq_medf[0] = 0.04762*Iq_med[0] + 0.04762*Iq_med[1] + 0.9048*Iq_medf[1];
+
+    I_Af[1] = I_Af[0];
+    I_Af[0] = 0.02439*(Corrente_A[AMOSTRAS-1] + Corrente_A[AMOSTRAS-2]) + 0.9512*I_Af[1];
+
     if (I_A == 0){
-        I_A = Corrente_A[AMOSTRAS-1];
+        I_A = I_Af[0];
     }
-    else if (Corrente_A[AMOSTRAS-1] > I_A){
-        I_A = Corrente_A[AMOSTRAS-1];
+    else if (I_Af[0] > I_A){
+        I_A = I_Af[0];
     }
+
+    I_Bf[1] = I_Bf[0];
+    I_Bf[0] = 0.02439*(Corrente_B[AMOSTRAS-1] + Corrente_B[AMOSTRAS-2]) + 0.9512*I_Bf[1];
+
+        if (I_B == 0){
+            I_B = I_Bf[0];
+        }
+        else if (I_Bf[0] > I_B){
+            I_B = I_Bf[0];
+        }
+
+    I_Cf[1] = I_Cf[0];
+    I_Cf[0] = 0.02439*(Corrente_C[AMOSTRAS-1] + Corrente_C[AMOSTRAS-2]) + 0.9512*I_Cf[1];
+
+        if (I_C == 0){
+            I_C = I_Cf[0];
+        }
+        else if (I_Cf[0] > I_C){
+            I_C = I_Cf[0];
+        }
+
 }
 
 void Setup_ePWM(void){
@@ -896,7 +926,7 @@ void Setup_ePWM(void){
         // Using CLKDIV = 1 and HSPCLKDIV = 1, we can obtain
         // TBPRD = 0.5*(150*10^6)/(2.5*10^3) = 30000
 
-        EPwm1Regs.TBPRD = 30000-1;
+        EPwm1Regs.TBPRD = 21429-1;//30000-1;
 
         // We would like to set ePWM1A to 1 on "CMPA - up match" and to
         // clear ePWM1A on event "CMPA - down math".
@@ -928,7 +958,7 @@ void Setup_ePWM(void){
         EPwm2Regs.TBCTL.bit.CTRMODE = 2;
         EPwm2Regs.TBCTL.bit.CLKDIV = 0;
         EPwm2Regs.TBCTL.bit.HSPCLKDIV = 0;
-        EPwm2Regs.TBPRD = 30000-1;
+        EPwm2Regs.TBPRD = 21429-1;//30000-1;
         EPwm2Regs.AQCTLA.bit.CAD = 1;
         EPwm2Regs.AQCTLA.bit.CAU = 2;
         EPwm2Regs.CMPA.half.CMPA = EPwm2Regs.TBPRD/2;
@@ -946,7 +976,7 @@ void Setup_ePWM(void){
         EPwm3Regs.TBCTL.bit.CTRMODE = 2;
         EPwm3Regs.TBCTL.bit.CLKDIV = 0;
         EPwm3Regs.TBCTL.bit.HSPCLKDIV = 0;
-        EPwm3Regs.TBPRD = 30000-1;
+        EPwm3Regs.TBPRD = 21429-1;//30000-1;
         EPwm3Regs.AQCTLA.bit.CAD = 1;
         EPwm3Regs.AQCTLA.bit.CAU = 2;
         EPwm3Regs.CMPA.half.CMPA = EPwm3Regs.TBPRD/2;
@@ -984,3 +1014,4 @@ void Change_ePWM(float InvFaseA, float InvFaseB, float InvFaseC){
 //===========================================================================
 // End of SourceCode.
 //===========================================================================
+
