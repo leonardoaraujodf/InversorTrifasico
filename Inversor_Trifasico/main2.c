@@ -75,9 +75,9 @@ float I_Af[2] = {0}, I_Bf[2] = {0}, I_Cf[2] = {0}; // Corrente máxima obtida
 
 const float PI = 3.1415926535;  // Definição do valor de pi
 const float V_base = 380.0;     // Valor da tensão de linha utilizada como base para os cálculos
-const float S_base = 5000; //10000.0;       // Valor da potência base (trifásica)                                                                 //// -----> UTILIZAR O MESMO VALOR DE POTÊNCIA DE BASE DO ATP
-const float I_base = 7.596714068284550;
-const float Z_base = 28.88;
+const float S_base = 10000; //5000;        // Valor da potência base (trifásica)                                                                 //// -----> UTILIZAR O MESMO VALOR DE POTÊNCIA DE BASE DO ATP
+const float I_base = 15.193428;
+const float Z_base = 14.44;
 
 /*
  * KV_PCI: Ganho da placa de condicionamento de sinal, considerando as alterações provocadas pelo transdutor de
