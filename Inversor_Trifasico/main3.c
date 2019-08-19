@@ -77,10 +77,10 @@ float I_Af[2] = {0}, I_Bf[2] = {0}, I_Cf[2] = {0}; // Corrente máxima obtida
 // ---------------------------------------------------
 
 float PI = 3.1415926535;  // Definição do valor de pi
-#define V_BASE 380.0     // Valor da tensão de linha utilizada como base para os cálculos
-#define S_BASE 10000.0 //5000;        // Valor da potência base (trifásica)                                                                 //// -----> UTILIZAR O MESMO VALOR DE POTÊNCIA DE BASE DO ATP
-#define I_BASE  S_BASE/(1.7320508*V_BASE) //15.193428;
-#define Z_BASE (V_BASE*V_BASE)/S_BASE // 14.44;
+float V_base = 380.0;      // Valor da tensão de linha utilizada como base para os cálculos
+float S_base =  10000.0; //5000;        // Valor da potência base (trifásica)                                                                 //// -----> UTILIZAR O MESMO VALOR DE POTÊNCIA DE BASE DO ATP
+float I_base = 15.193;//  S_base/(1.7320508*V_base) //15.193428;
+float Z_base =  14.44;// (V_base*V_base)/S_base // 14.44;
 
 /*
  * KV_PCI: Ganho da placa de condicionamento de sinal, considerando as alterações provocadas pelo transdutor de
@@ -98,6 +98,7 @@ float PI = 3.1415926535;  // Definição do valor de pi
  *                              50                          0,3030303030 * 5,0
  */
 const float KV_PCI = 261.36;//290.40; //13.2; // 290.40; // 167.64;
+const float KV_PCI_CC = 304.92;
 const float KI_PCI = 33.0/4.0;    // AINDA DEVE SER AJUSTADO CORRETAMENTE                                       //// -----> NÃO ENTENDI COMO AJUSTAR ISTO
 /*
  * Constante utilizada para transformar o valor de saida do conversor A/D no valor de entrada.  A mesma segue
@@ -143,10 +144,10 @@ float Vd_med[2] = {0, 0}, Vq_med[2] = {0, 0}, Vd_medf[2] = {0, 0}, Vq_medf[2] = 
 float Id_med[2] = {0, 0}, Iq_med[2] = {0, 0}, Id_medf[2] = {0, 0}, Iq_medf[2] = {0, 0};
 
 // Indutância do filtro de saída, em H
-#define L_Filt 0.003 // O filtro que está sendo utilizado é de 3 mH
+float L_Filt = 0.003; // O filtro que está sendo utilizado é de 3 mH
 
 // Indutância do filtro de saída, em pu, para cálculo dos termos de acoplamento entre malhas de controle
-#define L_pu (376.99111841*L_Filt)/(Z_BASE) //0.078624099722992; //+ 0.0003; // O valor 0.0003 refere-se a impedância do transformador em pu
+float L_pu = 0.07832225;//(376.99111841*L_Filt)/(Z_base) //0.078624099722992; //+ 0.0003; // O valor 0.0003 refere-se a impedância do transformador em pu
 
 // Valores de tensão no capacitor
 
@@ -169,7 +170,7 @@ float Erro_P[2] = {0,0}, Erro_Q[2] = {0,0};
 float Id_ref[2] = {0, 0}, Iq_ref[2] = {0, 0};
 
 // Ganhos dos controladores PI de Potência Ativa
-const float K1 = 0.7523, K2 = 0.7477;
+const float K1 = 0.1184, K2 = 0.1176; // --> valores para 940 uF //K1 = 0.7523, K2 = 0.7477; // --> Valores para 6 mF
 
 // Ganhos dos controladores PI de Potência Reativa
 const float K3 = 0.739, K4 = 0.7269;
@@ -519,7 +520,7 @@ interrupt void adc_isr(void)
     AD_output4 = (AdcMirror.ADCRESULT3) - 1860;
     AD_output5 = (AdcMirror.ADCRESULT4) - 1860;
     AD_output6 = (AdcMirror.ADCRESULT5) - 1860;
-    AD_output7 = (AdcMirror.ADCRESULT6) - 1865;
+    AD_output7 = (AdcMirror.ADCRESULT6) - 1880; // 621
 
 
     // Conversão dos valores de saída do conversor A/D
@@ -529,7 +530,7 @@ interrupt void adc_isr(void)
     Corrente_A[AMOSTRAS-1]  = KI_PCI*Kad*(float)AD_output4;
     Corrente_B[AMOSTRAS-1]  = KI_PCI*Kad*(float)AD_output5;
     Corrente_C[AMOSTRAS-1]  = KI_PCI*Kad*(float)AD_output6;
-    Vcc[AMOSTRAS-1] = KV_PCI*Kad*(float)AD_output7;
+    Vcc[AMOSTRAS-1] = KV_PCI_CC*Kad*(float)AD_output7;
 
     // Testes do sistema de aquisição: Detecção de amplitudes e frequencia dos sinais do lado da linha
 
@@ -872,13 +873,11 @@ void Malha_Controle(void){
     V_CAP[1] = V_CAP[0];
     V_CAP[0] = Vcc[AMOSTRAS-1];
 
-    V_CAPF[1] = V_CAPF[0];
-
     /*
      * Filtragem do sinal de realimentação.
      * O Valor da frequência de corte do filtro passa-baixas é 500 rad/s.
      * */
-
+    V_CAPF[1] = V_CAPF[0];
     V_CAPF[0] = 0.02439*(V_CAP[0] + V_CAP[1]) + 0.9512*V_CAPF[1];
 
 
@@ -918,21 +917,21 @@ void Malha_Controle(void){
 
     // Conversão das tensões medidas para pu
 
-    Vd_pu = Vd_medf[0]/(V_BASE*sqrt(2)/sqrt(3));
-    Vq_pu = Vq_medf[0]/(V_BASE*sqrt(2)/sqrt(3));
+    Vd_pu = Vd_medf[0]/(V_base*sqrt(2)/sqrt(3));
+    Vq_pu = Vq_medf[0]/(V_base*sqrt(2)/sqrt(3));
 
     // Conversão das correntes medidas para pu
 
-    Id_pu = Id_medf[0]/I_BASE;
-    Iq_pu = Iq_medf[0]/I_BASE;
+    Id_pu = Id_medf[0]/I_base;
+    Iq_pu = Iq_medf[0]/I_base;
 
     // Cálculo de potência
 
     P_med[1] = P_med[0];
     Q_med[1] = Q_med[0];
 
-    P_med[0] = 1.5*(Vd_med[0]*Id_med[0] + Vq_med[0]*Iq_med[0])/S_BASE;
-    Q_med[0] = 1.5*(Vq_med[0]*Id_med[0] - Vd_med[0]*Iq_med[0])/S_BASE;
+    P_med[0] = 1.5*(Vd_med[0]*Id_med[0] + Vq_med[0]*Iq_med[0])/S_base;
+    Q_med[0] = 1.5*(Vq_med[0]*Id_med[0] - Vd_med[0]*Iq_med[0])/S_base;
 
     // * Filtragem das potências trifásicas. O filtro passa-baixas têm
     // * frequência de corte em 100 rad/s.
@@ -949,13 +948,21 @@ void Malha_Controle(void){
     Erro_P[1] = Erro_P[0];
     Erro_Q[1] = Erro_Q[0];
 
-    Erro_P[0] = -1*(1 - V_CAPF[0]/680);
+    Erro_P[0] = -1*(1 - V_CAPF[0]/180);
     Erro_Q[0] = 0 - Q_medf[0];
 
     Id_ref[1] = Id_ref[0];
 
     Id_ref[0] = K1*Erro_P[0] - K2*Erro_P[1] + Id_ref[1];
-    Id_ref[0] = 0.05;// 0.01 * 15.2 A = 0.152 A // <--- Valor inserido de corrente
+
+    // Setar valor máximo de corrente permitida
+
+    if (Id_ref[0] >= 0.2){
+        Id_ref[0] = 0.2;
+    }
+
+    // Teste da malha interna de corrente
+    //Id_ref[0] = 0.05;// 0.01 * 15.2 A = 0.152 A // <--- Valor inserido de corrente
 
     Iq_ref[1] = Iq_ref[0];
 
@@ -1013,3 +1020,4 @@ void Change_ePWM(float InvFaseA, float InvFaseB, float InvFaseC){
 //===========================================================================
 // End of SourceCode.
 //===========================================================================
+
