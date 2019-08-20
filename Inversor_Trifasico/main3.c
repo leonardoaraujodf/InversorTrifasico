@@ -97,8 +97,8 @@ float Z_base =  14.44;// (V_base*V_base)/S_base // 14.44;
  *        Vsaida =  -----------------------------       ->  KI_PCI = -------------------- = 33,0
  *                              50                          0,3030303030 * 5,0
  */
-const float KV_PCI = 261.36;//290.40; //13.2; // 290.40; // 167.64;
-const float KV_PCI_CC = 304.92;
+const float KV_PCI = 264.75;//290.40;//290.40; //13.2; // 290.40; // 167.64;
+const float KV_PCI_CC = 304.92; //290.40;//304.92;
 const float KI_PCI = 33.0/4.0;    // AINDA DEVE SER AJUSTADO CORRETAMENTE                                       //// -----> NÃO ENTENDI COMO AJUSTAR ISTO
 /*
  * Constante utilizada para transformar o valor de saida do conversor A/D no valor de entrada.  A mesma segue
@@ -128,6 +128,16 @@ float Tensao_Af[2] = {0,0};
 float Tensao_Bf[2] = {0,0};
 float Tensao_Cf[2] = {0,0};
 
+// Variaveis para as correntes de entrada filtradas
+
+float Corrente_Af[2] = {0};
+float Corrente_Bf[2] = {0};
+float Corrente_Cf[2] = {0};
+
+// Variaveis para verificação dos valores RMS das tensões e correntes de entrada
+
+float Tensao_A_RMS = 0, Tensao_B_RMS = 0, Tensao_C_RMS = 0;
+float Corrente_A_RMS = 0, Corrente_B_RMS = 0, Corrente_C_RMS = 0;
 
 // Variaveis para implementação do DSOGI-FLL                                                     //// -----> OK PARA INV., PARA RET. SERÃO VARIÁVEIS DO SMO.
 const float k = 1.41424356, Tau = 266.579;// 50.0;
@@ -173,10 +183,10 @@ float Id_ref[2] = {0, 0}, Iq_ref[2] = {0, 0};
 const float K1 = 0.1184, K2 = 0.1176; // --> valores para 940 uF //K1 = 0.7523, K2 = 0.7477; // --> Valores para 6 mF
 
 // Ganhos dos controladores PI de Potência Reativa
-const float K3 = 0.739, K4 = 0.7269;
+const float K3 = 0.5081, K4 = 0.4939; //K3 = 0.739, K4 = 0.7269;
 
 // Ganhos dos controladores PI de Corrente
-const float K5 = 0.7358, K6 = 0.7242;
+const float K5 = 0.7358, K6 = 0.7242;//K5 = 0.8104, K6 = 0.7957;
 
 // Valores de referência para os controladores de corrente de eixo direto e em quadratura
 //float Id_ref[2] = {0, 0}, Iq_ref[2] = {0, 0};
@@ -520,7 +530,7 @@ interrupt void adc_isr(void)
     AD_output4 = (AdcMirror.ADCRESULT3) - 1860;
     AD_output5 = (AdcMirror.ADCRESULT4) - 1860;
     AD_output6 = (AdcMirror.ADCRESULT5) - 1860;
-    AD_output7 = (AdcMirror.ADCRESULT6) - 1880; // 621
+    AD_output7 = (AdcMirror.ADCRESULT6) - 1715; // 621
 
 
     // Conversão dos valores de saída do conversor A/D
@@ -531,6 +541,36 @@ interrupt void adc_isr(void)
     Corrente_B[AMOSTRAS-1]  = KI_PCI*Kad*(float)AD_output5;
     Corrente_C[AMOSTRAS-1]  = KI_PCI*Kad*(float)AD_output6;
     Vcc[AMOSTRAS-1] = KV_PCI_CC*Kad*(float)AD_output7;
+
+    // Filtragem das tensões e correntes de entrada amostradas
+    // O Valor da frequência de corte do filtro passa-baixas é 500 rad/s.
+
+    Tensao_Af[1] = Tensao_Af[0];
+    Tensao_Af[0] = 0.02439*(Tensao_A[AMOSTRAS-1] + Tensao_A[AMOSTRAS-2]) + 0.9512*Tensao_Af[1];
+
+    Tensao_Bf[1] = Tensao_Bf[0];
+    Tensao_Bf[0] = 0.02439*(Tensao_B[AMOSTRAS-1] + Tensao_B[AMOSTRAS-2]) + 0.9512*Tensao_Bf[1];
+
+    Tensao_Cf[1] = Tensao_Cf[0];
+    Tensao_Cf[0] = 0.02439*(Tensao_C[AMOSTRAS-1] + Tensao_C[AMOSTRAS-2]) + 0.9512*Tensao_Cf[1];
+
+    Corrente_Af[0] = Corrente_Af[1];
+    Corrente_Af[0] = 0.02439*(Corrente_A[AMOSTRAS-1] + Corrente_A[AMOSTRAS-2]) + 0.9512*Corrente_Af[1];
+
+    Corrente_Bf[0] = Corrente_Bf[1];
+    Corrente_Bf[0] = 0.02439*(Corrente_B[AMOSTRAS-1] + Corrente_B[AMOSTRAS-2]) + 0.9512*Corrente_Bf[1];
+
+    Corrente_Cf[0] = Corrente_Cf[1];
+    Corrente_Cf[0] = 0.02439*(Corrente_C[AMOSTRAS-1] + Corrente_C[AMOSTRAS-2]) + 0.9512*Corrente_Cf[1];
+
+
+    // Calculo de tensão no capacitor
+
+    V_CAP[1] = V_CAP[0];
+    V_CAP[0] = Vcc[AMOSTRAS-1];
+
+    V_CAPF[1] = V_CAPF[0];
+    V_CAPF[0] = 0.02439*(V_CAP[0] + V_CAP[1]) + 0.9512*V_CAPF[1];
 
     // Testes do sistema de aquisição: Detecção de amplitudes e frequencia dos sinais do lado da linha
 
@@ -868,17 +908,6 @@ void Setup_ePWM(void){
 
 void Malha_Controle(void){
 
-    // Calculo de tensão no capacitor
-
-    V_CAP[1] = V_CAP[0];
-    V_CAP[0] = Vcc[AMOSTRAS-1];
-
-    /*
-     * Filtragem do sinal de realimentação.
-     * O Valor da frequência de corte do filtro passa-baixas é 500 rad/s.
-     * */
-    V_CAPF[1] = V_CAPF[0];
-    V_CAPF[0] = 0.02439*(V_CAP[0] + V_CAP[1]) + 0.9512*V_CAPF[1];
 
 
     // Transformação vetorial das tensões: ABC para DQO
@@ -948,18 +977,12 @@ void Malha_Controle(void){
     Erro_P[1] = Erro_P[0];
     Erro_Q[1] = Erro_Q[0];
 
-    Erro_P[0] = -1*(1 - V_CAPF[0]/180);
+    Erro_P[0] = -1*(1 - V_CAPF[0]/550);
     Erro_Q[0] = 0 - Q_medf[0];
 
     Id_ref[1] = Id_ref[0];
 
     Id_ref[0] = K1*Erro_P[0] - K2*Erro_P[1] + Id_ref[1];
-
-    // Setar valor máximo de corrente permitida
-
-    if (Id_ref[0] >= 0.2){
-        Id_ref[0] = 0.2;
-    }
 
     // Teste da malha interna de corrente
     //Id_ref[0] = 0.05;// 0.01 * 15.2 A = 0.152 A // <--- Valor inserido de corrente
@@ -967,7 +990,7 @@ void Malha_Controle(void){
     Iq_ref[1] = Iq_ref[0];
 
     Iq_ref[0] = K3*Erro_Q[0] - K4*Erro_Q[1] + Iq_ref[1];
-    Iq_ref[0] = 0.0; // <-- Valor inserido de corrente
+    Iq_ref[0] = 0.01; // <-- Valor inserido de corrente
 
     // Controladores de corrente de eixo direto: calculo do erro e execução do controle PI
 
