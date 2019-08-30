@@ -30,18 +30,11 @@
 // Diretivas de definição
 #define ADC_CKPS 0x01
 #define AMOSTRAS 16                      // Numero de amostras de tensão armazenadas internamente               //// -----> NO NOSSO CASO, SERÃO TAMBÉM 16? DOS DOIS LADOS?
-#define PERI_PWM 1000000    //0.0004    // Periodo de chaveamento do inversor, considerando uma frequencia de 2500 Hz (0,4 ms) //// -----> NO ATP ESTAMOS UTILIZANDO 3500 Hz.
-#define PERI_AMOSTRAGEM 0.0001          // Periodo de amostragem do controle, considerando uma frequencia de 10 kHz (0,1 ms)   //// -----> CONSIDERA-SE A MESMA FREQUÊNCIA?
+#define PERI_PWM 1000000    //0.0004    // Periodo de chaveamento do inversor, considerando uma frequencia de 2500 Hz (0,4 ms)
+#define PERI_AMOSTRAGEM 0.0001          // Periodo de amostragem do controle, considerando uma frequencia de 10 kHz (0,1 ms)
+#define V_REF_CC 225.0
 
-// Estrutura para armazenamento das caracteristicas do sinal: amplitude e frequência
-//struct DadosEstimados{
-//    float Amplitude;        // Variável para armazenamento do valor de pico
-//    float Frequencia;   // Variável para armazenamento da frequência estimada
-//    float Zero;         // Variável para armazenamento da última por zero
-//};
-
-
-// Funções preexistentes nas bibliotecas da TI para configuração da CPU                                                                //// -----> SERÃO AS MESMAS FUNÇÕES?
+// Funções preexistentes nas bibliotecas da TI para configuração da CPU
 extern void InitSysCtrl(void);
 extern void InitPieCtrl(void);
 extern void InitPieVectTable(void);
@@ -55,34 +48,28 @@ extern void InitAdc(void);
 void Gpio_select(void);                             // Configuração das saídas digitais
 interrupt void cpu_timer0_isr(void);                // Função associada à interrupção vinculada ao Timer 0
 interrupt void adc_isr(void);                       // Função associada à interrupção vinculada ao ADC
-//void SpaceVectorPWM(void);                          // Função para determinação dos pulsos PWM
+//void SpaceVectorPWM(void);                        // Função para determinação dos pulsos PWM
 void DSOGI_FLL(float Va, float Vb, float Vc);       // Função para o DSOGI-FLL
-//struct DadosEstimados Data_Estimation(float *Voltage);
-void Data_Estimation(void); // Função que determina o valor máximo de tensão e correntes lidos
+void Data_Estimation(void); // Função que determina o valor RMS de tensão e correntes lidos
 void Setup_ePWM(void); // Função que configura os canais ePWM1, ePWM2 e ePWM3 para gerar os pulsos de chaveamento
-void Change_ePWM(float InvFaseA, float InvFaseB, float InvFaseC); // Função que altera o duty cycle dos pulsos de chaveamento conforme as ondas modulantes
-void Malha_Controle(void);
-
+void Change_ePWM(void); // Função que altera o duty cycle dos pulsos de chaveamento conforme as ondas modulantes
+void Malha_Controle(void); // Função que realiza as transformações ABC para DQO e também calcula os valores de Ev e Eq baseados nos controladores de malha interna e externa
 
 
 // Variaveis globais utilizadas no programa
 // #############################################################################
-
-// Variaveis para armazenamento das caracteristicas do sinal
-float V_A = 0; // Tensao máxima obtida
-float I_A = 0, I_B = 0, I_C = 0;
-float I_Af[2] = {0}, I_Bf[2] = {0}, I_Cf[2] = {0}; // Corrente máxima obtida
 
 // Váriáveis associadas à placa de aquisição de sinais
 // ---------------------------------------------------
 
 float PI = 3.1415926535;  // Definição do valor de pi
 float V_base = 380.0;      // Valor da tensão de linha utilizada como base para os cálculos
-float S_base =  10000.0; //5000;        // Valor da potência base (trifásica)                                                                 //// -----> UTILIZAR O MESMO VALOR DE POTÊNCIA DE BASE DO ATP
-float I_base = 15.193;//  S_base/(1.7320508*V_base) //15.193428;
-float Z_base =  14.44;// (V_base*V_base)/S_base // 14.44;
+float S_base =  10000.0; //5000;        // Valor da potência base (trifásica)
+float I_base = 15.193;//  Fórmula utilizada -> I_bse = S_base/(1.7320508*V_base) //15.193428;
+float Z_base =  14.44;// Fórmula utilizada -> Z_base = (V_base*V_base)/S_base // 14.44;
 
 /*
+ * As variáveis abaixo referem-se ao ganho que deve ser atribuído as placas de condionamento de sinais.
  * KV_PCI: Ganho da placa de condicionamento de sinal, considerando as alterações provocadas pelo transdutor de
  * tensão e pelo filtro anti-aliasing. A utilização deste ganho permite transformar o sinal de saída da
  * PCI (Vsaida) no sinal de entrada (Ventrada ou Ientrada). As transformações seguem as seguintes proporções:
@@ -97,15 +84,20 @@ float Z_base =  14.44;// (V_base*V_base)/S_base // 14.44;
  *        Vsaida =  -----------------------------       ->  KI_PCI = -------------------- = 33,0
  *                              50                          0,3030303030 * 5,0
  */
-const float KV_PCI = 264.75;//290.40;//290.40; //13.2; // 290.40; // 167.64;
-const float KV_PCI_CC = 304.92; //290.40;//304.92;
-const float KI_PCI = 33.0/4.0;    // AINDA DEVE SER AJUSTADO CORRETAMENTE                                       //// -----> NÃO ENTENDI COMO AJUSTAR ISTO
+float KV_PCI = 264.75;//290.40;//290.40; //13.2; // 290.40; // 167.64; --> Ganho da placa de condicionamento, referente ao sensor de tensão
+float KV_PCI_A = 252.27;
+float KV_PCI_B = 262.26;
+float KV_PCI_C = 255.70;
+float KV_PCI_CC = 271.86; //290.40;//304.92; --> Ganho da placa de condionamento, referente ao sensor de tensão do barramento CC
+float KI_PCI = 0.84*(33.0/4.0); // --> Ganho do sensor de corrente. É realizado uma divisão por "4.0" pois o fio que passa pelo sensor de corrente está dando 4 voltas.
+                               // Logo, é como se estivessemos calculando uma corrente 4x maior que a verdadeira.
+
 /*
  * Constante utilizada para transformar o valor de saida do conversor A/D no valor de entrada.  A mesma segue
  * a resolução do conversor A/D do DSP (3,3 V; 12 bits - 4095)
  * Kad = 3,3/4095 = 0.000805860806                                                            //// -----> OK, OS VALORES SÃO OS MESMOS?
  */
-const float Kad = 0.000805860806;
+float Kad = 0.000805860806;
 
 // Variáveis para armazenamento da saída do conversor AD
 // -----------------------------------------------------
@@ -121,7 +113,6 @@ float Tensao_B[AMOSTRAS]    = {0};
 float Tensao_C[AMOSTRAS]    = {0};
 float Vcc[AMOSTRAS]     = {0};
 
-
 // Variaveis para as tensoes de entrada filtradas
 
 float Tensao_Af[2] = {0,0};
@@ -130,24 +121,37 @@ float Tensao_Cf[2] = {0,0};
 
 // Variaveis para as correntes de entrada filtradas
 
-float Corrente_Af[2] = {0};
-float Corrente_Bf[2] = {0};
-float Corrente_Cf[2] = {0};
+float Corrente_Af[2] = {0,0};
+float Corrente_Bf[2] = {0,0};
+float Corrente_Cf[2] = {0,0};
 
 // Variaveis para verificação dos valores RMS das tensões e correntes de entrada
 
 float Tensao_A_RMS = 0, Tensao_B_RMS = 0, Tensao_C_RMS = 0;
+float Soma_Tensao_A = 0, Soma_Tensao_B = 0, Soma_Tensao_C = 0;
 float Corrente_A_RMS = 0, Corrente_B_RMS = 0, Corrente_C_RMS = 0;
+float Soma_Corrente_A = 0, Soma_Corrente_B = 0, Soma_Corrente_C = 0;
+float Contador_Amostras = 0;
 
-// Variaveis para implementação do DSOGI-FLL                                                     //// -----> OK PARA INV., PARA RET. SERÃO VARIÁVEIS DO SMO.
+// Variaveis para implementação do DSOGI-FLL
 const float k = 1.41424356, Tau = 266.579;// 50.0;
 float V_alfa_inter[2] = {0}, V_alfa_out[2] = {0}, V_alfa_int[2] = {0};
 float V_beta_inter[2] = {0}, V_beta_out[2] = {0}, V_beta_int[2] = {0};
 float V_alfa_P = 0, V_alfa_N = 0, V_beta_P = 0, V_beta_N = 0;
 float FLL_int[2] = {0}, FLL_Freq[2] = {0}, Freq_in = 0, Freq_Rede = 376.99111841;
 float Teta = 0;
+
+// Variaveis e funcao para verificacao da PLL
+
+float Vpll = 0;
+void Teste_PLL(void);
+
+// Variavel utilizada para verificar a primeira passagem pelo codigo do algoritmo da PLL
 unsigned int first_time = 0;
 
+// Contador utilizado para aguardar o sincronismo da PLL com a rede
+
+unsigned int counter = 0;
 
 // Variáveis para implementação do controle vetorial (sistema síncrono (DQ0) com as tensões no PAC)
 float Vd_med[2] = {0, 0}, Vq_med[2] = {0, 0}, Vd_medf[2] = {0, 0}, Vq_medf[2] = {0, 0};
@@ -177,19 +181,35 @@ float P_medf[2] = {0,0}, Q_medf[2] = {0,0};
 
 // Valores de erro de potência
 float Erro_P[2] = {0,0}, Erro_Q[2] = {0,0};
+
+// Valores de referência para os controladores de corrente de eixo direito e em quadratura
 float Id_ref[2] = {0, 0}, Iq_ref[2] = {0, 0};
 
 // Ganhos dos controladores PI de Potência Ativa
-const float K1 = 0.1184, K2 = 0.1176; // --> valores para 940 uF //K1 = 0.7523, K2 = 0.7477; // --> Valores para 6 mF
+/*
+ * Ganhos para o capacitor de 6 mF
+ * K1 = 0.7523, K2 = 0.7477
+ * K3 = 0.739, K4 = 0.7269
+ * K5 = 0.7358, K6 = 0.7242
+ *
+ * Ganhos para o capacitor de 940 uF
+ * K1 = 0.1184, K2 = 0.1176
+ * K3 = 0.5081, K4 = 0.4939
+ * K5 = 0.8104, K6 = 0.7957
+ *
+ * Ganhos utilizados na tese do Leonardo
+ * K1 = 0.8895, K2 = 0.8812;
+ * K3 = 0.7693, K4 = 0.7611;
+ * K5 = 0.8104, K6 = 0.7957;
+ * */
+
+float K1 = 0.8895, K2 = 0.8812;
 
 // Ganhos dos controladores PI de Potência Reativa
-const float K3 = 0.5081, K4 = 0.4939; //K3 = 0.739, K4 = 0.7269;
+float K3 = 0.7693, K4 = 0.7611;
 
 // Ganhos dos controladores PI de Corrente
-const float K5 = 0.7358, K6 = 0.7242;//K5 = 0.8104, K6 = 0.7957;
-
-// Valores de referência para os controladores de corrente de eixo direto e em quadratura
-//float Id_ref[2] = {0, 0}, Iq_ref[2] = {0, 0};
+float K5 = 0.8104, K6 = 0.7611;
 
 // Erro entre valores de referência e medidos, para correntes de eixo direto e em quadratura
 float Erro_id[2] = {0, 0}, Erro_iq[2] = {0, 0};
@@ -203,33 +223,23 @@ float Pi_id[2] = {0, 0}, Pi_iq[2] = {0, 0};
 // Valores das tensões a serem sintetizadas nos terminais do inversor
 float Ed_inv = 0, Eq_inv = 0, InvFaseA = 0, InvFaseB = 0, InvFaseC = 0;
 
-// Contador para a lógica de controle
-
-int counter = 0;
-
-
-int Chaves[6] = {1, 1, 1, 0, 0, 0}; // Matriz para armazenamento das posições das chaves.                           //// -----> NÃO ENTENDI ESSAS CHAVES.
+// int Chaves[6] = {1, 1, 1, 0, 0, 0}; // Matriz para armazenamento das posições das chaves
                        // A mesma é utilizada para alterar o estado das saidas digitais.
 
-int Status = 0;                     // Habilita o novo cálculo do estado do inversor
+//int Status = 0;                     // Habilita o novo cálculo do estado do inversor
+
+unsigned long int counter_iref = 0;
+unsigned long int counter_iref_sequence = 0;
 
 // Fim das variaveis globais utilizadas no programa
 // #############################################################################
 
 
-// Variaveis e funcao para verificacao da PLL
-
-float Vpll = 0;
-void teste_PLL(void);
 
 
-// Vetores para teste da FLL                                                        //// -----> E ESSES VETORES? DE ONDE VÊM?
-//int FaseA[834] = {1329,1329,1326,1321,1314,1306,1296,1283,1269,1254,1236,1217,1196,1173,1149,1122,1095,1066,1035,1003,969,934,898,860,821,781,740,698,655,611,566,520,474,427,379,331,282,233,183,133,83,33,-17,-67,-117,-167,-216,-266,-314,-363,-411,-458,-505,-551,-596,-640,-684,-726,-768,-808,-847,-885,-922,-958,-992,-1024,-1056,-1085,-1113,-1140,-1165,-1188,-1210,-1230,-1248,-1264,-1279,-1292,-1303,-1312,-1319,-1324,-1328,-1329,-1329,-1327,-1323,-1317,-1309,-1299,-1288,-1274,-1259,-1242,-1223,-1203,-1181,-1157,-1131,-1104,-1076,-1045,-1014,-980,-946,-910,-873,-834,-795,-754,-712,-670,-626,-581,-536,-489,-442,-395,-347,-298,-249,-200,-150,-100,-50,-0,50,100,150,200,249,298,347,395,442,489,536,581,626,670,712,754,795,834,873,910,946,980,1014,1045,1076,1104,1131,1157,1181,1203,1223,1242,1259,1274,1288,1299,1309,1317,1323,1327,1329,1329,1328,1324,1319,1312,1303,1292,1279,1264,1248,1230,1210,1188,1165,1140,1113,1085,1056,1024,992,958,922,885,847,808,768,726,684,640,596,551,505,458,411,363,314,266,216,167,117,67,17,-33,-83,-133,-183,-233,-282,-331,-379,-427,-474,-520,-566,-611,-655,-698,-740,-781,-821,-860,-898,-934,-969,-1003,-1035,-1066,-1095,-1122,-1149,-1173,-1196,-1217,-1236,-1254,-1269,-1283,-1296,-1306,-1314,-1321,-1326,-1329,-1329,-1329,-1326,-1321,-1314,-1306,-1296,-1283,-1269,-1254,-1236,-1217,-1196,-1173,-1149,-1122,-1095,-1066,-1035,-1003,-969,-934,-898,-860,-821,-781,-740,-698,-655,-611,-566,-520,-474,-427,-379,-331,-282,-233,-183,-133,-83,-33,17,67,117,167,216,266,314,363,411,458,505,551,596,640,684,726,768,808,847,885,922,958,992,1024,1056,1085,1113,1140,1165,1188,1210,1230,1248,1264,1279,1292,1303,1312,1319,1324,1328,1329,1329,1327,1323,1317,1309,1299,1288,1274,1259,1242,1223,1203,1181,1157,1131,1104,1076,1045,1014,980,946,910,873,834,795,754,712,670,626,581,536,489,442,395,347,298,249,200,150,100,50,-0,-50,-100,-150,-200,-249,-298,-347,-395,-442,-489,-536,-581,-626,-670,-712,-754,-795,-834,-873,-910,-946,-980,-1014,-1045,-1076,-1104,-1131,-1157,-1181,-1203,-1223,-1242,-1259,-1274,-1288,-1299,-1309,-1317,-1323,-1327,-1329,-1329,-1328,-1324,-1319,-1312,-1303,-1292,-1279,-1264,-1248,-1230,-1210,-1188,-1165,-1140,-1113,-1085,-1056,-1024,-992,-958,-922,-885,-847,-808,-768,-726,-684,-640,-596,-551,-505,-458,-411,-363,-314,-266,-216,-167,-117,-67,-17,33,83,133,183,233,282,331,379,427,474,520,566,611,655,698,740,781,821,860,898,934,969,1003,1035,1066,1095,1122,1149,1173,1196,1217,1236,1254,1269,1283,1296,1306,1314,1321,1326,1329,1329,1329,1326,1321,1314,1306,1296,1283,1269,1254,1236,1217,1196,1173,1149,1122,1095,1066,1035,1003,969,934,898,860,821,781,740,698,655,611,566,520,474,427,379,331,282,233,183,133,83,33,-17,-67,-117,-167,-216,-266,-314,-363,-411,-458,-505,-551,-596,-640,-684,-726,-768,-808,-847,-885,-922,-958,-992,-1024,-1056,-1085,-1113,-1140,-1165,-1188,-1210,-1230,-1248,-1264,-1279,-1292,-1303,-1312,-1319,-1324,-1328,-1329,-1329,-1327,-1323,-1317,-1309,-1299,-1288,-1274,-1259,-1242,-1223,-1203,-1181,-1157,-1131,-1104,-1076,-1045,-1014,-980,-946,-910,-873,-834,-795,-754,-712,-670,-626,-581,-536,-489,-442,-395,-347,-298,-249,-200,-150,-100,-50,0,50,100,150,200,249,298,347,395,442,489,536,581,626,670,712,754,795,834,873,910,946,980,1014,1045,1076,1104,1131,1157,1181,1203,1223,1242,1259,1274,1288,1299,1309,1317,1323,1327,1329,1329,1328,1324,1319,1312,1303,1292,1279,1264,1248,1230,1210,1188,1165,1140,1113,1085,1056,1024,992,958,922,885,847,808,768,726,684,640,596,551,505,458,411,363,314,266,216,167,117,67,17,-33,-83,-133,-183,-233,-282,-331,-379,-427,-474,-520,-566,-611,-655,-698,-740,-781,-821,-860,-898,-934,-969,-1003,-1035,-1066,-1095,-1122,-1149,-1173,-1196,-1217,-1236,-1254,-1269,-1283,-1296,-1306,-1314,-1321,-1326,-1329,-1329,-1329,-1326,-1321,-1314,-1306,-1296,-1283,-1269,-1254,-1236,-1217,-1196,-1173,-1149,-1122,-1095,-1066,-1035,-1003,-969,-934,-898,-860,-821,-781,-740,-698,-655,-611,-566,-520,-474,-427,-379,-331,-282,-233,-183,-133,-83,-33,17,67,117,167,216,266,314,363,411,458,505,551,596,640,684,726,768,808,847,885,922,958,992,1024,1056,1085,1113,1140,1165,1188,1210,1230,1248,1264,1279,1292,1303,1312,1319,1324,1328,1329};
-//int FaseB[834] = {-665,-621,-576,-531,-484,-437,-390,-341,-293,-244,-194,-145,-95,-45,6,56,106,156,205,255,304,352,400,448,495,541,586,631,674,717,759,799,839,877,914,950,984,1017,1049,1079,1107,1134,1160,1183,1205,1226,1244,1261,1276,1289,1300,1310,1318,1323,1327,1329,1329,1327,1324,1318,1311,1302,1290,1277,1263,1246,1228,1208,1186,1162,1137,1110,1082,1052,1021,988,954,918,881,843,804,763,722,679,636,591,546,500,453,406,358,309,260,211,161,111,61,11,-39,-89,-139,-189,-238,-287,-336,-384,-432,-479,-525,-571,-616,-660,-703,-745,-786,-826,-864,-902,-938,-973,-1006,-1038,-1069,-1098,-1125,-1151,-1176,-1198,-1219,-1238,-1255,-1271,-1285,-1297,-1307,-1315,-1322,-1326,-1329,-1329,-1328,-1325,-1320,-1314,-1305,-1294,-1282,-1268,-1252,-1234,-1215,-1193,-1170,-1146,-1119,-1092,-1062,-1031,-999,-965,-930,-894,-856,-817,-777,-736,-693,-650,-606,-561,-515,-469,-421,-374,-325,-276,-227,-178,-128,-78,-28,22,72,122,172,222,271,320,368,416,463,510,556,601,645,689,731,772,813,852,890,926,961,995,1028,1059,1088,1116,1143,1168,1191,1212,1232,1250,1266,1280,1293,1304,1313,1320,1325,1328,1329,1329,1326,1322,1316,1308,1298,1286,1273,1257,1240,1221,1201,1178,1154,1128,1101,1072,1042,1010,977,942,906,869,830,790,750,708,665,621,576,531,484,437,390,341,293,244,194,145,95,45,-6,-56,-106,-156,-205,-255,-304,-352,-400,-448,-495,-541,-586,-631,-674,-717,-759,-799,-839,-877,-914,-950,-984,-1017,-1049,-1079,-1107,-1134,-1160,-1183,-1205,-1226,-1244,-1261,-1276,-1289,-1300,-1310,-1318,-1323,-1327,-1329,-1329,-1327,-1324,-1318,-1311,-1302,-1290,-1277,-1263,-1246,-1228,-1208,-1186,-1162,-1137,-1110,-1082,-1052,-1021,-988,-954,-918,-881,-843,-804,-763,-722,-679,-636,-591,-546,-500,-453,-406,-358,-309,-260,-211,-161,-111,-61,-11,39,89,139,189,238,287,336,384,432,479,525,571,616,660,703,745,786,826,864,902,938,973,1006,1038,1069,1098,1125,1151,1176,1198,1219,1238,1255,1271,1285,1297,1307,1315,1322,1326,1329,1329,1328,1325,1320,1314,1305,1294,1282,1268,1252,1234,1215,1193,1170,1146,1119,1092,1062,1031,999,965,930,894,856,817,777,736,693,650,606,561,515,469,421,374,325,276,227,178,128,78,28,-22,-72,-122,-172,-222,-271,-320,-368,-416,-463,-510,-556,-601,-645,-689,-731,-772,-813,-852,-890,-926,-961,-995,-1028,-1059,-1088,-1116,-1143,-1168,-1191,-1212,-1232,-1250,-1266,-1280,-1293,-1304,-1313,-1320,-1325,-1328,-1329,-1329,-1326,-1322,-1316,-1308,-1298,-1286,-1273,-1257,-1240,-1221,-1201,-1178,-1154,-1128,-1101,-1072,-1042,-1010,-977,-942,-906,-869,-830,-790,-750,-708,-665,-621,-576,-531,-484,-437,-390,-341,-293,-244,-194,-145,-95,-45,6,56,106,156,205,255,304,352,400,448,495,541,586,631,674,717,759,799,839,877,914,950,984,1017,1049,1079,1107,1134,1160,1183,1205,1226,1244,1261,1276,1289,1300,1310,1318,1323,1327,1329,1329,1327,1324,1318,1311,1302,1290,1277,1263,1246,1228,1208,1186,1162,1137,1110,1082,1052,1021,988,954,918,881,843,804,763,722,679,636,591,546,500,453,406,358,309,260,211,161,111,61,11,-39,-89,-139,-189,-238,-287,-336,-384,-432,-479,-525,-571,-616,-660,-703,-745,-786,-826,-864,-902,-938,-973,-1006,-1038,-1069,-1098,-1125,-1151,-1176,-1198,-1219,-1238,-1255,-1271,-1285,-1297,-1307,-1315,-1322,-1326,-1329,-1329,-1328,-1325,-1320,-1314,-1305,-1294,-1282,-1268,-1252,-1234,-1215,-1193,-1170,-1146,-1119,-1092,-1062,-1031,-999,-965,-930,-894,-856,-817,-777,-736,-693,-650,-606,-561,-515,-469,-421,-374,-325,-276,-227,-178,-128,-78,-28,22,72,122,172,222,271,320,368,416,463,510,556,601,645,689,731,772,813,852,890,926,961,995,1028,1059,1088,1116,1143,1168,1191,1212,1232,1250,1266,1280,1293,1304,1313,1320,1325,1328,1329,1329,1326,1322,1316,1308,1298,1286,1273,1257,1240,1221,1201,1178,1154,1128,1101,1072,1042,1010,977,942,906,869,830,790,750,708,665,621,576,531,484,437,390,341,293,244,194,145,95,45,-6,-56,-106,-156,-205,-255,-304,-352,-400,-448,-495,-541,-586,-631,-674,-717,-759,-799,-839,-877,-914,-950,-984,-1017,-1049,-1079,-1107,-1134,-1160,-1183,-1205,-1226,-1244,-1261,-1276,-1289,-1300,-1310,-1318,-1323,-1327,-1329,-1329,-1327,-1324,-1318,-1311,-1302,-1290,-1277,-1263,-1246,-1228,-1208,-1186,-1162,-1137,-1110,-1082,-1052,-1021,-988,-954,-918,-881,-843,-804,-763,-722,-679};
-//int FaseC[834] = {-665,-708,-750,-790,-830,-869,-906,-942,-977,-1010,-1042,-1072,-1101,-1128,-1154,-1178,-1201,-1221,-1240,-1257,-1273,-1286,-1298,-1308,-1316,-1322,-1326,-1329,-1329,-1328,-1325,-1320,-1313,-1304,-1293,-1280,-1266,-1250,-1232,-1212,-1191,-1168,-1143,-1116,-1088,-1059,-1028,-995,-961,-926,-890,-852,-813,-772,-731,-689,-645,-601,-556,-510,-463,-416,-368,-320,-271,-222,-172,-122,-72,-22,28,78,128,178,227,276,325,374,421,469,515,561,606,650,693,736,777,817,856,894,930,965,999,1031,1062,1092,1119,1146,1170,1193,1215,1234,1252,1268,1282,1294,1305,1314,1320,1325,1328,1329,1329,1326,1322,1315,1307,1297,1285,1271,1255,1238,1219,1198,1176,1151,1125,1098,1069,1038,1006,973,938,902,864,826,786,745,703,660,616,571,525,479,432,384,336,287,238,189,139,89,39,-11,-61,-111,-161,-211,-260,-309,-358,-406,-453,-500,-546,-591,-636,-679,-722,-763,-804,-843,-881,-918,-954,-988,-1021,-1052,-1082,-1110,-1137,-1162,-1186,-1208,-1228,-1246,-1263,-1277,-1290,-1302,-1311,-1318,-1324,-1327,-1329,-1329,-1327,-1323,-1318,-1310,-1300,-1289,-1276,-1261,-1244,-1226,-1205,-1183,-1160,-1134,-1107,-1079,-1049,-1017,-984,-950,-914,-877,-839,-799,-759,-717,-674,-631,-586,-541,-495,-448,-400,-352,-304,-255,-205,-156,-106,-56,-6,45,95,145,194,244,293,341,390,437,484,531,576,621,665,708,750,790,830,869,906,942,977,1010,1042,1072,1101,1128,1154,1178,1201,1221,1240,1257,1273,1286,1298,1308,1316,1322,1326,1329,1329,1328,1325,1320,1313,1304,1293,1280,1266,1250,1232,1212,1191,1168,1143,1116,1088,1059,1028,995,961,926,890,852,813,772,731,689,645,601,556,510,463,416,368,320,271,222,172,122,72,22,-28,-78,-128,-178,-227,-276,-325,-374,-421,-469,-515,-561,-606,-650,-693,-736,-777,-817,-856,-894,-930,-965,-999,-1031,-1062,-1092,-1119,-1146,-1170,-1193,-1215,-1234,-1252,-1268,-1282,-1294,-1305,-1314,-1320,-1325,-1328,-1329,-1329,-1326,-1322,-1315,-1307,-1297,-1285,-1271,-1255,-1238,-1219,-1198,-1176,-1151,-1125,-1098,-1069,-1038,-1006,-973,-938,-902,-864,-826,-786,-745,-703,-660,-616,-571,-525,-479,-432,-384,-336,-287,-238,-189,-139,-89,-39,11,61,111,161,211,260,309,358,406,453,500,546,591,636,679,722,763,804,843,881,918,954,988,1021,1052,1082,1110,1137,1162,1186,1208,1228,1246,1263,1277,1290,1302,1311,1318,1324,1327,1329,1329,1327,1323,1318,1310,1300,1289,1276,1261,1244,1226,1205,1183,1160,1134,1107,1079,1049,1017,984,950,914,877,839,799,759,717,674,631,586,541,495,448,400,352,304,255,205,156,106,56,6,-45,-95,-145,-194,-244,-293,-341,-390,-437,-484,-531,-576,-621,-665,-708,-750,-790,-830,-869,-906,-942,-977,-1010,-1042,-1072,-1101,-1128,-1154,-1178,-1201,-1221,-1240,-1257,-1273,-1286,-1298,-1308,-1316,-1322,-1326,-1329,-1329,-1328,-1325,-1320,-1313,-1304,-1293,-1280,-1266,-1250,-1232,-1212,-1191,-1168,-1143,-1116,-1088,-1059,-1028,-995,-961,-926,-890,-852,-813,-772,-731,-689,-645,-601,-556,-510,-463,-416,-368,-320,-271,-222,-172,-122,-72,-22,28,78,128,178,227,276,325,374,421,469,515,561,606,650,693,736,777,817,856,894,930,965,999,1031,1062,1092,1119,1146,1170,1193,1215,1234,1252,1268,1282,1294,1305,1314,1320,1325,1328,1329,1329,1326,1322,1315,1307,1297,1285,1271,1255,1238,1219,1198,1176,1151,1125,1098,1069,1038,1006,973,938,902,864,826,786,745,703,660,616,571,525,479,432,384,336,287,238,189,139,89,39,-11,-61,-111,-161,-211,-260,-309,-358,-406,-453,-500,-546,-591,-636,-679,-722,-763,-804,-843,-881,-918,-954,-988,-1021,-1052,-1082,-1110,-1137,-1162,-1186,-1208,-1228,-1246,-1263,-1277,-1290,-1302,-1311,-1318,-1324,-1327,-1329,-1329,-1327,-1323,-1318,-1310,-1300,-1289,-1276,-1261,-1244,-1226,-1205,-1183,-1160,-1134,-1107,-1079,-1049,-1017,-984,-950,-914,-877,-839,-799,-759,-717,-674,-631,-586,-541,-495,-448,-400,-352,-304,-255,-205,-156,-106,-56,-6,45,95,145,194,244,293,341,390,437,484,531,576,621,665,708,750,790,830,869,906,942,977,1010,1042,1072,1101,1128,1154,1178,1201,1221,1240,1257,1273,1286,1298,1308,1316,1322,1326,1329,1329,1328,1325,1320,1313,1304,1293,1280,1266,1250,1232,1212,1191,1168,1143,1116,1088,1059,1028,995,961,926,890,852,813,772,731,689,645,601,556,510,463,416,368,320,271,222,172,122,72,22,-28,-78,-128,-178,-227,-276,-325,-374,-421,-469,-515,-561,-606,-650};
 
 //###########################################################################
-//                      main code                                           //// -----> DIFÍCIL ENTENDER, TIRANDO DSOGI-PLL E DQ0
+//                      main code
 //###########################################################################
 void main(void)
 {
@@ -434,11 +444,11 @@ void Gpio_select(void)
 
 }
 
-interrupt void cpu_timer0_isr(void)
+/*interrupt void cpu_timer0_isr(void)
 {
-    /* Esta função é utlizada para atualizar o estado das saidas digitais, as
+     Esta função é utlizada para atualizar o estado das saidas digitais, as
      * quais se destinam a comandar as chaves do inversor.
-     */
+
 
     //Contador de execução da interrupção
     CpuTimer0.InterruptCount++;
@@ -484,7 +494,7 @@ interrupt void cpu_timer0_isr(void)
     SysCtrlRegs.WDKEY = 0x55;
     SysCtrlRegs.WDKEY = 0xAA;
     EDIS;
-}
+}*/
 
 interrupt void adc_isr(void)
 {
@@ -501,27 +511,6 @@ interrupt void adc_isr(void)
         Vcc[jj] = Vcc[jj + 1];
     }
 
-
-/*
-    // #####################################
-    // Código para testes da FL
-    // ------------------------
-    if(counter>834)
-        counter = 0;
-
-    //Atualização do vetor com os valores de tensão medida no lado da linha de transmissão
-    AD_output1 = FaseA[counter];
-    AD_output2 = FaseB[counter];
-    AD_output3 = FaseC[counter];
-
-    AD_output4 = FaseA[counter];
-    AD_output5 = FaseB[counter];
-    AD_output6 = FaseC[counter];
-    counter++;
-
-    //####################################
-*/
-
     // Amostragem das tensões e correntes. O offset está de acordo com
     // o ajuste da placa de aquisição de dados
     AD_output1 = (AdcRegs.ADCRESULT0>>4) - 1862;
@@ -534,9 +523,9 @@ interrupt void adc_isr(void)
 
 
     // Conversão dos valores de saída do conversor A/D
-    Tensao_A[AMOSTRAS-1]    = KV_PCI*Kad*(float)AD_output1;
-    Tensao_B[AMOSTRAS-1]    = KV_PCI*Kad*(float)AD_output2;
-    Tensao_C[AMOSTRAS-1]    = KV_PCI*Kad*(float)AD_output3;
+    Tensao_A[AMOSTRAS-1]    = KV_PCI_A*Kad*(float)AD_output1;
+    Tensao_B[AMOSTRAS-1]    = KV_PCI_B*Kad*(float)AD_output2;
+    Tensao_C[AMOSTRAS-1]    = KV_PCI_C*Kad*(float)AD_output3;
     Corrente_A[AMOSTRAS-1]  = KI_PCI*Kad*(float)AD_output4;
     Corrente_B[AMOSTRAS-1]  = KI_PCI*Kad*(float)AD_output5;
     Corrente_C[AMOSTRAS-1]  = KI_PCI*Kad*(float)AD_output6;
@@ -555,13 +544,13 @@ interrupt void adc_isr(void)
     Tensao_Cf[0] = 0.02439*(Tensao_C[AMOSTRAS-1] + Tensao_C[AMOSTRAS-2]) + 0.9512*Tensao_Cf[1];
 
     Corrente_Af[0] = Corrente_Af[1];
-    Corrente_Af[0] = 0.02439*(Corrente_A[AMOSTRAS-1] + Corrente_A[AMOSTRAS-2]) + 0.9512*Corrente_Af[1];
+    Corrente_Af[0] = 0.07024*(Corrente_A[AMOSTRAS-1] + Corrente_A[AMOSTRAS-2]) + 0.85953*Corrente_Af[1];
 
     Corrente_Bf[0] = Corrente_Bf[1];
-    Corrente_Bf[0] = 0.02439*(Corrente_B[AMOSTRAS-1] + Corrente_B[AMOSTRAS-2]) + 0.9512*Corrente_Bf[1];
+    Corrente_Bf[0] = 0.07024*(Corrente_B[AMOSTRAS-1] + Corrente_B[AMOSTRAS-2]) + 0.85953*Corrente_Bf[1];
 
     Corrente_Cf[0] = Corrente_Cf[1];
-    Corrente_Cf[0] = 0.02439*(Corrente_C[AMOSTRAS-1] + Corrente_C[AMOSTRAS-2]) + 0.9512*Corrente_Cf[1];
+    Corrente_Cf[0] = 0.07024*(Corrente_C[AMOSTRAS-1] + Corrente_C[AMOSTRAS-2]) + 0.85953*Corrente_Cf[1];
 
 
     // Calculo de tensão no capacitor
@@ -570,16 +559,10 @@ interrupt void adc_isr(void)
     V_CAP[0] = Vcc[AMOSTRAS-1];
 
     V_CAPF[1] = V_CAPF[0];
-    V_CAPF[0] = 0.02439*(V_CAP[0] + V_CAP[1]) + 0.9512*V_CAPF[1];
+    //V_CAPF[0] = 0.02439*(V_CAP[0] + V_CAP[1]) + 0.9512*V_CAPF[1];
+    V_CAPF[0] = 0.00624*(V_CAP[0] + V_CAP[1]) + 0.98751*V_CAPF[1];
 
     // Testes do sistema de aquisição: Detecção de amplitudes e frequencia dos sinais do lado da linha
-
-    //I_A = Data_Estimation(Corrente_A);
-    //I_B   = Data_Estimation(Corrente_B);
-    //I_C   = Data_Estimation(Corrente_C);
-    //V_A   = Data_Estimation(Tensao_A);
-    //V_B   = Data_Estimation(Tensao_B);
-    //V_C   = Data_Estimation(Tensao_C);
 
     Data_Estimation();
 
@@ -588,22 +571,19 @@ interrupt void adc_isr(void)
     DSOGI_FLL(Tensao_A[AMOSTRAS-1], Tensao_B[AMOSTRAS-1], Tensao_C[AMOSTRAS-1]);
 
     // Verificação do sincronismo da PLL utilizando um pino de GPIO
-    teste_PLL();
+    Teste_PLL();
 
-    //InvFaseA = 0.95*cos(Teta);
-    //InvFaseB = 0.95*cos(Teta - 2.094395102);
-    //InvFaseC = 0.95*cos(Teta + 2.094395102);
+    // Implementação de um contador para esperar o a sincronização do algoritmo da PLL com as tensões da rede.
 
-    if (counter > 5*167){
-
-        //InvFaseA = 0.95*cos(Teta);
-        //InvFaseB = 0.95*cos(Teta - 2.094395102);
-        //InvFaseC = 0.95*cos(Teta + 2.094395102);
+    if (counter > 10*167-1){
 
         Malha_Controle();
+        //InvFaseA = 0.98*cos(Teta);
+        //InvFaseB = 0.98*cos(Teta - 2.094395102);
+        //InvFaseC = 0.98*cos(Teta + 2.094395102);
 
         // Determinação dos pulsos de chaveamento
-        Change_ePWM(InvFaseA,InvFaseB,InvFaseC);
+        Change_ePWM();
     }
     else{
         counter++;
@@ -763,7 +743,7 @@ void DSOGI_FLL(float Va, float Vb, float Vc)
 
 //}
 
-void teste_PLL(void){
+void Teste_PLL(void){
     /*
      * Esta função verifica o status da PLL com relação a fase A da rede.
      * A verificação é realizada através da GPIO12 do DSP.
@@ -783,42 +763,37 @@ void teste_PLL(void){
 }
 
 void Data_Estimation(void){
-    if (V_A == 0){
-        V_A = Tensao_A[AMOSTRAS-1];
+
+    Soma_Tensao_A += Tensao_A[AMOSTRAS-1]*Tensao_A[AMOSTRAS-1];
+    Soma_Tensao_B += Tensao_B[AMOSTRAS-1]*Tensao_B[AMOSTRAS-1];
+    Soma_Tensao_C += Tensao_C[AMOSTRAS-1]*Tensao_C[AMOSTRAS-1];
+    Soma_Corrente_A += Corrente_A[AMOSTRAS-1]*Corrente_A[AMOSTRAS-1];
+    Soma_Corrente_B += Corrente_B[AMOSTRAS-1]*Corrente_B[AMOSTRAS-1];
+    Soma_Corrente_C += Corrente_C[AMOSTRAS-1]*Corrente_C[AMOSTRAS-1];
+
+    //Soma_Corrente_A += Corrente_Af[0]*Corrente_Af[0];
+    //Soma_Corrente_B += Corrente_Bf[0]*Corrente_Bf[0];
+    //Soma_Corrente_C += Corrente_Cf[0]*Corrente_Cf[0];
+
+    Contador_Amostras++;
+
+    if(Contador_Amostras == 167 - 1){
+
+        Tensao_A_RMS = sqrt(Soma_Tensao_A/167);
+        Tensao_B_RMS = sqrt(Soma_Tensao_B/167);
+        Tensao_C_RMS = sqrt(Soma_Tensao_C/167);
+        Corrente_A_RMS = sqrt(Soma_Corrente_A/167);
+        Corrente_B_RMS = sqrt(Soma_Corrente_B/167);
+        Corrente_C_RMS = sqrt(Soma_Corrente_C/167);
+
+        Contador_Amostras = 0;
+        Soma_Tensao_A = 0;
+        Soma_Tensao_B = 0;
+        Soma_Tensao_C = 0;
+        Soma_Corrente_A = 0;
+        Soma_Corrente_B = 0;
+        Soma_Corrente_C = 0;
     }
-    else if (Tensao_A[AMOSTRAS-1] > V_A){
-        V_A = Tensao_A[AMOSTRAS-1];
-    }
-
-    I_Af[1] = I_Af[0];
-    I_Af[0] = 0.02439*(Corrente_A[AMOSTRAS-1] + Corrente_A[AMOSTRAS-2]) + 0.9512*I_Af[1];
-
-    if (I_A == 0){
-        I_A = I_Af[0];
-    }
-    else if (I_Af[0] > I_A){
-        I_A = I_Af[0];
-    }
-
-    I_Bf[1] = I_Bf[0];
-    I_Bf[0] = 0.02439*(Corrente_B[AMOSTRAS-1] + Corrente_B[AMOSTRAS-2]) + 0.9512*I_Bf[1];
-
-        if (I_B == 0){
-            I_B = I_Bf[0];
-        }
-        else if (I_Bf[0] > I_B){
-            I_B = I_Bf[0];
-        }
-
-    I_Cf[1] = I_Cf[0];
-    I_Cf[0] = 0.02439*(Corrente_C[AMOSTRAS-1] + Corrente_C[AMOSTRAS-2]) + 0.9512*I_Cf[1];
-
-        if (I_C == 0){
-            I_C = I_Cf[0];
-        }
-        else if (I_Cf[0] > I_C){
-            I_C = I_Cf[0];
-        }
 
 }
 
@@ -908,20 +883,17 @@ void Setup_ePWM(void){
 
 void Malha_Controle(void){
 
-
-
     // Transformação vetorial das tensões: ABC para DQO
-    Vd_med[1] = Vd_med[0];
-    Vq_med[1] = Vq_med[0];
-    Vd_med[0] = 0.66666667*( Tensao_A[AMOSTRAS-1]*cos(Teta) + Tensao_B[AMOSTRAS-1]*cos(Teta - 2.094395102) + Tensao_C[AMOSTRAS-1]*cos(Teta + 2.094395102) );
-    Vq_med[0] = -0.66666667*( Tensao_A[AMOSTRAS-1]*sin(Teta) + Tensao_B[AMOSTRAS-1]*sin(Teta - 2.094395102) + Tensao_C[AMOSTRAS-1]*sin(Teta + 2.094395102) );
+        Vd_med[1] = Vd_med[0];
+        Vq_med[1] = Vq_med[0];
+        Vd_med[0] = 0.66666667*( Tensao_A[AMOSTRAS-1]*cos(Teta) + Tensao_B[AMOSTRAS-1]*cos(Teta - 2.094395102) + Tensao_C[AMOSTRAS-1]*cos(Teta + 2.094395102) );
+        Vq_med[0] = -0.66666667*( Tensao_A[AMOSTRAS-1]*sin(Teta) + Tensao_B[AMOSTRAS-1]*sin(Teta - 2.094395102) + Tensao_C[AMOSTRAS-1]*sin(Teta + 2.094395102) );
 
     // Transformação vetorial das correntes: ABC para DQO
     Id_med[1] = Id_med[0];
     Iq_med[1] = Iq_med[0];
     Id_med[0] = 0.66666667*( Corrente_A[AMOSTRAS-1]*cos(Teta) + Corrente_B[AMOSTRAS-1]*cos(Teta - 2.094395102) + Corrente_C[AMOSTRAS-1]*cos(Teta + 2.094395102) );
     Iq_med[0] = -0.66666667*( Corrente_A[AMOSTRAS-1]*sin(Teta) + Corrente_B[AMOSTRAS-1]*sin(Teta - 2.094395102) + Corrente_C[AMOSTRAS-1]*sin(Teta + 2.094395102) );
-
 
     // Filtragem e normalização das tensões
     // --------------------------------------
@@ -965,7 +937,6 @@ void Malha_Controle(void){
     // * Filtragem das potências trifásicas. O filtro passa-baixas têm
     // * frequência de corte em 100 rad/s.
 
-
     P_medf[1] = P_medf[0];
     Q_medf[1] = Q_medf[0];
 
@@ -977,7 +948,7 @@ void Malha_Controle(void){
     Erro_P[1] = Erro_P[0];
     Erro_Q[1] = Erro_Q[0];
 
-    Erro_P[0] = -1*(1 - V_CAPF[0]/550);
+    Erro_P[0] = -1*(1 - V_CAPF[0]/V_REF_CC);
     Erro_Q[0] = 0 - Q_medf[0];
 
     Id_ref[1] = Id_ref[0];
@@ -985,12 +956,47 @@ void Malha_Controle(void){
     Id_ref[0] = K1*Erro_P[0] - K2*Erro_P[1] + Id_ref[1];
 
     // Teste da malha interna de corrente
-    //Id_ref[0] = 0.05;// 0.01 * 15.2 A = 0.152 A // <--- Valor inserido de corrente
+    //Id_ref[0] = 0.03;// 0.01 * 15.2 A = 0.152 A // <--- Valor inserido de corrente
+
+
+    if(counter_iref < 50000){
+        Id_ref[0] = 0.01974; // <-- 0.3 A
+    }
+    else if(counter_iref >= 50000 && counter_iref < 100000){
+        Id_ref[0] = 2*0.01974; // <-- 0.6 A
+    }
+    else if(counter_iref >= 100000 && counter_iref < 150000){
+        Id_ref[0] = 3*0.01974; // <-- 0.9 A
+    }
+    else if(counter_iref >= 150000 && counter_iref < 200000){
+        Id_ref[0] = 4*0.01974; // <-- 1.2 A
+    }
+    else if(counter_iref >= 200000 && counter_iref < 250000){
+        Id_ref[0] = 5*0.01974; // <-- 1.5 A
+    }
+
+    if (counter_iref_sequence == 0){
+        counter_iref++;
+    }
+    else{
+        counter_iref--;
+    }
+
+    if(counter_iref == 0 && counter_iref_sequence == 1){
+        counter_iref_sequence = 0;
+        counter_iref = 50000;
+    }
+    else if(counter_iref == 250000-1 && counter_iref_sequence == 0){
+        counter_iref_sequence = 1;
+        counter_iref = 200000-1;
+    }
+
+
 
     Iq_ref[1] = Iq_ref[0];
 
     Iq_ref[0] = K3*Erro_Q[0] - K4*Erro_Q[1] + Iq_ref[1];
-    Iq_ref[0] = 0.01; // <-- Valor inserido de corrente
+    //Iq_ref[0] = 0; // <-- Valor inserido de corrente
 
     // Controladores de corrente de eixo direto: calculo do erro e execução do controle PI
 
@@ -1014,13 +1020,13 @@ void Malha_Controle(void){
     InvFaseB = 0.66666667*( Ed_inv*cos(Teta - 2.094395102) - Eq_inv*sin(Teta - 2.094395102) );
     InvFaseC = 0.66666667*( Ed_inv*cos(Teta + 2.094395102) - Eq_inv*sin(Teta + 2.094395102) );
 
-
 }
 
-void Change_ePWM(float InvFaseA, float InvFaseB, float InvFaseC){
+void Change_ePWM(void){
     // Esta função converte a onda modulante que está entre -1 e 1
     // em um valor inteiro e insere em cada registrador CMPA para que
     // estes possam ser comparados com os registradores TBPRD de cada ePWM
+
     unsigned int value1, value2, value3;
     value1 = (InvFaseA + 1.0)*(EPwm1Regs.TBPRD/2);
     value2 = (InvFaseB + 1.0)*(EPwm1Regs.TBPRD/2);
